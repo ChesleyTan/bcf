@@ -110,7 +110,6 @@ def evolution(slist, number, max_value=None, keep_endpoints=False, process_until
 
         value[i0] = relevance(s, i0, peri, keep_endpoints)
         value[i1] = relevance(s, i1, peri, keep_endpoints)
-        print value
     return s, value, del_val
 
 def relevance(s, index, peri, keep_endpoints):
