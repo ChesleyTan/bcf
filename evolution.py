@@ -1,5 +1,5 @@
-# TODO: Test against MATLAB implementation
-from math import sqrt, acos, pi, inf
+# -*- coding: utf-8 -*-
+from math import sqrt, acos, pi
 import numpy as np
 '''
 Implementation of Discrete Contour Evolution algorithm (Longin Jan Latecki, Rolf Lakämper, Convexity
@@ -32,16 +32,16 @@ def evolution(slist, number, max_value=None, keep_endpoints=False, process_until
     if max_value is not None and max_value > 0:
         number = 3
     else:
-        max_value = inf
+        max_value = float("inf")
 
     if process_until_convex:
         number = 3
-        max_value = inf
+        max_value = float("inf")
 
     del_val = np.array([])
     s = slist
     # initialize value vector (containing the information value of each vertex)
-    value = np.zeros((1, len(s)))
+    value = np.zeros((len(s), 1))
 
     if number < 3 or len(slist) <= 3:
         print("WARNING (evolution): less than 3 vertices")
@@ -95,26 +95,28 @@ def evolution(slist, number, max_value=None, keep_endpoints=False, process_until
         # delete vertex
         px = s[i, 0]
         py = s[i, 1]
-        np.delete(s, i, axis=0)
-        np.delete(value, i, axis=0)
+        s = np.delete(s, i, axis=0)
+        value = np.delete(value, i, axis=0)
 
-        np.append(del_val, [m], axis=0)
+        del_val = np.append(del_val, [m], axis=0)
 
         # neighboring vertices
         i0 = i - 1
         i1 = i
-        if i0 == 0:
-            i0 = len(s)
-        elif i1 > len(s):
-            i1 = 1
+        if i0 < 0:
+            i0 = len(s) - 1
+        elif i1 >= len(s):
+            i1 = 0
 
         value[i0] = relevance(s, i0, peri, keep_endpoints)
         value[i1] = relevance(s, i1, peri, keep_endpoints)
+        print value
+    return s, value, del_val
 
 def relevance(s, index, peri, keep_endpoints):
     if keep_endpoints:
         if index == 0 or index == len(s[:, 0]) - 1:
-            return inf
+            return float("inf")
     # vertices
     i0 = index - 1
     i1 = index
@@ -174,9 +176,9 @@ def blocked(s, i):
         k = [i, i0, i1]
 
     v = np.arange(len(s))
-    np.delete(v, k[0], axis=0)
-    np.delete(v, k[1], axis=0)
-    np.delete(v, k[2], axis=0)
+    v = np.delete(v, k[0], axis=0)
+    v = np.delete(v, k[1], axis=0)
+    v = np.delete(v, k[2], axis=0)
 
     for k in range(len(v)):
         px = s[v[k], 0]
@@ -194,9 +196,9 @@ def blocked(s, i):
             e1 = s[i, :] - np.array([px, py])
             e2 = s[i1, :] - np.array([px, py])
 
-            d0 = np.linalg.det(np.append(a, e0, axis=0))
-            d1 = np.linalg.det(np.append(b, e1, axis=0))
-            d2 = np.linalg.det(np.append(c, e2, axis=0))
+            d0 = np.linalg.det(np.append([a], [e0], axis=0))
+            d1 = np.linalg.det(np.append([b], [e1], axis=0))
+            d2 = np.linalg.det(np.append([c], [e2], axis=0))
 
             # INSIDE?
             b = (d0 > 0 and d1 > 0 and d2 > 0) or (d0 < 0 and d1 < 0 and d2 < 0)
@@ -237,3 +239,104 @@ def curvature_direction(s, i):
 
 def poly_perimeter(s):
     return np.sum(np.sqrt(np.diff(s[:, 0]) ** 2 + np.diff(s[:, 1]) ** 2))
+
+if __name__ == "__main__":
+    slist = np.array([
+    [6.0000,    5.8000],
+    [8.4189,    5.8000],
+   [10.8378,    5.8000],
+   [12.8425,    6.8000],
+   [15.2614,    6.8000],
+   [17.6803,    6.8000],
+   [19.7773,    7.5773],
+   [22.1039,    7.8000],
+   [24.1086,    6.8000],
+   [26.5275,    6.8000],
+   [28.9464,    6.8000],
+   [30.9511,    7.8000],
+   [33.2616,    8.0616],
+   [35.3747,    8.8000],
+   [37.3794,    9.8000],
+   [39.7983,    9.8000],
+   [42.1536,    9.6464],
+   [43.8640,    7.9360],
+   [46.1602,    7.9602],
+   [48.2313,    8.8000],
+   [50.4597,    9.2597],
+   [52.6548,    9.8000],
+   [54.6595,   10.8000],
+   [57.0555,   10.8555],
+   [59.0831,   11.8000],
+   [61.0878,   12.8000],
+   [63.3583,   13.1583],
+   [65.3616,   13.4384],
+   [67.1019,   11.8000],
+   [69.5208,   11.8000],
+   [71.9397,   11.8000],
+   [73.9444,   12.8000],
+   [75.9640,   13.7640],
+   [78.3680,   13.8000],
+   [80.3727,   14.8000],
+   [82.5597,   15.3597],
+   [84.7963,   15.8000],
+   [86.8593,   16.6593],
+   [89.1555,   16.9555],
+   [91.1588,   17.9588],
+   [92.2000,   19.9464],
+   [93.2000,   21.9511],
+   [93.2000,   24.3700],
+   [94.2000,   26.3747],
+   [94.7611,   28.5611],
+   [95.2000,   30.7983],
+   [94.0657,   32.2000],
+   [91.6468,   32.2000],
+   [89.2279,   32.2000],
+   [86.8090,   32.2000],
+   [84.8616,   31.0616],
+   [82.7996,   30.2000],
+   [80.5621,   29.7621],
+   [78.5587,   28.7587],
+   [76.3713,   28.2000],
+   [74.3666,   27.2000],
+   [73.2000,   28.9209],
+   [70.9430,   29.2000],
+   [68.6635,   28.8635],
+   [66.6602,   27.8602],
+   [64.5147,   27.2000],
+   [62.5100,   26.2000],
+   [60.5053,   25.2000],
+   [58.3540,   24.5540],
+   [56.4960,   23.2000],
+   [54.3474,   22.5474],
+   [52.0724,   22.2000],
+   [50.0479,   21.2479],
+   [48.0445,   20.2445],
+   [46.2000,   21.2245],
+   [45.6394,   23.2000],
+   [43.2205,   23.2000],
+   [41.2158,   22.2000],
+   [39.2111,   21.2000],
+   [37.1460,   20.3460],
+   [35.1426,   19.3426],
+   [33.1393,   18.3393],
+   [30.8431,   18.0431],
+   [28.7734,   17.2000],
+   [26.7687,   18.2000],
+   [24.5403,   17.7403],
+   [22.5370,   16.7370],
+   [20.7547,   15.2000],
+   [18.7500,   14.2000],
+   [16.7453,   13.2000],
+   [14.7406,   12.2000],
+   [12.7359,   11.2000],
+   [10.8099,   10.0099],
+    [8.7265,    9.2000],
+    [6.8033,    8.0033]
+    ])
+
+    number = 50
+    max_value = 1.5
+    keep_endpoints = False
+    process_until_convex = False
+    display = False
+    print evolution(slist, number, max_value, keep_endpoints, process_until_convex, display)
