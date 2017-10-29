@@ -77,15 +77,15 @@ def evolution(slist, number, max_value=None, keep_endpoints=False, process_until
             # this procedure is separated from the 'usual min-case'
             # for speed-reasons (sort is needed instead of min)
             if bf:
-                ind = np.argsort(value)
+                ind = np.argsort(value, axis=0)
                 rel = value[ind]
                 j = 2
                 m = 1e16
                 while j < len(s):
-                    i = ind[j]
+                    i = ind[j][0]
                     bf = blocked(s, i)
                     if not bf:
-                        m = rel[j]
+                        m = rel[j][0][0]
                         break
                     j += 1
 
