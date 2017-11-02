@@ -6,6 +6,7 @@ import numpy as np
 import cv2
 
 from evolution import evolution
+from shape_context import shape_context
 
 class BCF():
     def __init__(self):
@@ -60,15 +61,27 @@ class BCF():
                 else:
                     C = np.append(C, [[pnt[0][0], pnt[0][1]]], axis=0)
             cfs = self.extr_raw_points(C, max_curvature, n_contsamp, n_pntsamp)
-            print cfs
             tmp = mat.copy()
             for cf in cfs:
-                print cf
                 for pnt in cf:
-                    print pnt
                     cv2.circle(tmp, (pnt[0], pnt[1]), 2, (255, 0, 0))
-                self.show(tmp)
-            print len(cfs)
+                #self.show(tmp)
+            num_cfs = len(cfs)
+            print "Extracted %s points" % (num_cfs)
+            feat_sc = np.zeros((300, num_cfs))
+            xy = np.zeros((num_cfs, 2))
+
+            for i in range(num_cfs):
+                cf = cfs[i]
+                sc, _, _, _ = shape_context(cf)
+                # shape context is 60x5 (60 bins at 5 reference points)
+                sc = sc.flatten(order='F')
+                sc /= np.sum(sc) # normalize
+                feat_sc[:, i] = sc
+                # shape context descriptor sc for each cf is 300x1
+                # save a point at the midpoint of the contour fragment
+                xy[i, 0:2] = cf[np.round(len(cf) / 2. - 1).astype('int32'), :]
+            sz = image.shape
 
     def learn_codebook(self):
         pass
