@@ -167,7 +167,7 @@ class BCF():
             labels.append(hash(cls))
         print("Training SVM...")
         clf = clf.fit(training_data, labels)
-        print("Saving classifier")
+        print("Saving classifier...")
         with open(self.CLASSIFIER_FILE, 'wb') as out_file:
             pickle.dump(clf, out_file, -1)
         return clf
