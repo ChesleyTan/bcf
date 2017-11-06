@@ -1,4 +1,5 @@
 import os
+import sys
 from collections import defaultdict
 from functools import reduce
 
@@ -158,7 +159,7 @@ class BCF():
         return feas
 
     def svm_train(self):
-        clf = sklearn.svm.LinearSVC()
+        clf = sklearn.svm.LinearSVC(multi_class='crammer_singer')
         training_data = []
         labels = []
         for (cls, idx) in self.data.keys():
@@ -245,7 +246,10 @@ if __name__ == "__main__":
     bcf = BCF()
     bcf.load_classes()
     train = False
+    if len(sys.argv) > 1:
+        train = sys.argv[1] == "train"
     if train:
+        print("Training mode")
         bcf.load_training()
         bcf.normalize_shapes()
         bcf.extract_cf()
@@ -258,6 +262,7 @@ if __name__ == "__main__":
         #    print (np.sum(image['spp_descriptor']))
         bcf.svm_train()
     else:
+        print("Testing mode")
         bcf.load_testing()
         bcf.normalize_shapes()
         bcf.extract_cf()
