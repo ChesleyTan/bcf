@@ -5,6 +5,7 @@ from functools import reduce
 from scipy.spatial.distance import cdist
 import numpy as np
 import cv2
+import sklearn
 import sklearn.cluster
 import cPickle as pickle
 
@@ -17,6 +18,7 @@ class BCF():
         self.DATA_DIR = "data/cuauv"
         self.PERC_TRAINING_PER_CLASS = 0.5
         self.CODEBOOK_FILE = "codebook.data"
+        self.CLASSIFIER_FILE = "classifier"
         self.classes = defaultdict(list)
         self.data = defaultdict(dict)
         self.counter = defaultdict(int)
@@ -34,56 +36,66 @@ class BCF():
             for image in images[:int(len(images) * self.PERC_TRAINING_PER_CLASS)]:
                 self.data[self.get_image_identifier(cls)]['image'] = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
 
-    def normalize_shape(self, image):
-        # Remove void space
-        y, x = np.where(image > 50)
-        max_y = y.max()
-        min_y = y.min()
-        max_x = x.max()
-        min_x = x.min()
-        trimmed = image[min_y:max_y, min_x:max_x] > 50
-        trimmed = trimmed.astype('uint8')
-        trimmed[trimmed > 0] = 255
-        return trimmed
+    def load_testing(self):
+        for cls in self.classes:
+            images = self.classes[cls]
+            for image in images[int(len(images) * self.PERC_TRAINING_PER_CLASS):]:
+                self.data[self.get_image_identifier(cls)]['image'] = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
 
-    def extract_cf(self, image):
-        contours, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contour = sorted(contours, key=len)[-1]
-        mat = np.zeros(image.shape, np.int8)
-        cv2.drawContours(mat, [contour], -1, (255, 255, 255))
-        #self.show(mat)
-        max_curvature = 1.5
-        n_contsamp = 50
-        n_pntsamp = 10
-        C = None
-        for pnt in contour:
-            if C is None:
-                C = np.array([[pnt[0][0], pnt[0][1]]])
-            else:
-                C = np.append(C, [[pnt[0][0], pnt[0][1]]], axis=0)
-        cfs = self.extr_raw_points(C, max_curvature, n_contsamp, n_pntsamp)
-        tmp = mat.copy()
-        for cf in cfs:
-            for pnt in cf:
-                cv2.circle(tmp, (pnt[0], pnt[1]), 2, (255, 0, 0))
-            #self.show(tmp)
-        num_cfs = len(cfs)
-        print "Extracted %s points" % (num_cfs)
-        feat_sc = np.zeros((300, num_cfs))
-        xy = np.zeros((num_cfs, 2))
+    def normalize_shapes(self):
+        for (cls, idx) in bcf.data.keys():
+            image = bcf.data[(cls, idx)]['image']
+            # Remove void space
+            y, x = np.where(image > 50)
+            max_y = y.max()
+            min_y = y.min()
+            max_x = x.max()
+            min_x = x.min()
+            trimmed = image[min_y:max_y, min_x:max_x] > 50
+            trimmed = trimmed.astype('uint8')
+            trimmed[trimmed > 0] = 255
+            bcf.data[(cls, idx)]['normalized_image'] = trimmed
 
-        for i in range(num_cfs):
-            cf = cfs[i]
-            sc, _, _, _ = shape_context(cf)
-            # shape context is 60x5 (60 bins at 5 reference points)
-            sc = sc.flatten(order='F')
-            sc /= np.sum(sc) # normalize
-            feat_sc[:, i] = sc
-            # shape context descriptor sc for each cf is 300x1
-            # save a point at the midpoint of the contour fragment
-            xy[i, 0:2] = cf[np.round(len(cf) / 2. - 1).astype('int32'), :]
-        sz = image.shape
-        return (cfs, feat_sc, xy, sz)
+    def extract_cf(self):
+        for (cls, idx) in bcf.data.keys():
+            image = bcf.data[(cls, idx)]['normalized_image']
+            contours, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contour = sorted(contours, key=len)[-1]
+            mat = np.zeros(image.shape, np.int8)
+            cv2.drawContours(mat, [contour], -1, (255, 255, 255))
+            #self.show(mat)
+            MAX_CURVATURE = 1.5
+            N_CONTSAMP = 50
+            N_PNTSAMP = 10
+            C = None
+            for pnt in contour:
+                if C is None:
+                    C = np.array([[pnt[0][0], pnt[0][1]]])
+                else:
+                    C = np.append(C, [[pnt[0][0], pnt[0][1]]], axis=0)
+            cfs = self.extr_raw_points(C, MAX_CURVATURE, N_CONTSAMP, N_PNTSAMP)
+            tmp = mat.copy()
+            for cf in cfs:
+                for pnt in cf:
+                    cv2.circle(tmp, (pnt[0], pnt[1]), 2, (255, 0, 0))
+                #self.show(tmp)
+            num_cfs = len(cfs)
+            print "Extracted %s points" % (num_cfs)
+            feat_sc = np.zeros((300, num_cfs))
+            xy = np.zeros((num_cfs, 2))
+
+            for i in range(num_cfs):
+                cf = cfs[i]
+                sc, _, _, _ = shape_context(cf)
+                # shape context is 60x5 (60 bins at 5 reference points)
+                sc = sc.flatten(order='F')
+                sc /= np.sum(sc) # normalize
+                feat_sc[:, i] = sc
+                # shape context descriptor sc for each cf is 300x1
+                # save a point at the midpoint of the contour fragment
+                xy[i, 0:2] = cf[np.round(len(cf) / 2. - 1).astype('int32'), :]
+            sz = image.shape
+            bcf.data[(cls, idx)]['cfs'] = (cfs, feat_sc, xy, sz)
 
     def learn_codebook(self):
         MAX_CFS = 800 # max number of contour fragments per image; if above, sample randomly
@@ -146,11 +158,37 @@ class BCF():
         return feas
 
     def svm_train(self):
-        print self.training_images
-        pass
+        clf = sklearn.svm.LinearSVC()
+        training_data = []
+        labels = []
+        for (cls, idx) in self.data.keys():
+            training_data.append(self.data[(cls, idx)]['spp_descriptor'])
+            labels.append(hash(cls))
+        print("Training SVM...")
+        clf = clf.fit(training_data, labels)
+        print("Saving classifier")
+        with open(self.CLASSIFIER_FILE, 'wb') as out_file:
+            pickle.dump(clf, out_file, -1)
+        return clf
 
-    def svm_classify(self):
-        pass
+    def svm_classify_test(self):
+        with open(self.CLASSIFIER_FILE, 'rb') as in_file:
+            clf = pickle.load(in_file)
+        testing_data = []
+        labels = []
+        label_to_cls = {}
+        for (cls, idx) in self.data.keys():
+            testing_data.append(self.data[(cls, idx)]['spp_descriptor'])
+            labels.append(hash(cls))
+            label_to_cls[hash(cls)] = cls
+        predictions = clf.predict(testing_data)
+        correct = 0
+        for i in range(len(labels)):
+            if predictions[i] == labels[i]:
+                correct += 1
+            else:
+                print("Mistook %s for %s" % (label_to_cls[labels[i]], label_to_cls[predictions[i]]))
+        print ("Correct: %s out of %s (Accuracy: %.2f%%)" % (correct, len(predictions), 100. * correct / len(predictions)))
 
     def show(self, image):
         cv2.imshow('image', image)
@@ -206,17 +244,26 @@ class BCF():
 if __name__ == "__main__":
     bcf = BCF()
     bcf.load_classes()
-    bcf.load_training()
-    feats = []
-    train = True
+    train = False
     if train:
-        for (cls, idx) in bcf.data.keys():
-            print (cls, idx)
-            bcf.data[(cls, idx)]['normalized_image'] = bcf.normalize_shape(bcf.data[(cls, idx)]['image'])
-            bcf.data[(cls, idx)]['cfs'] = bcf.extract_cf(bcf.data[(cls, idx)]['normalized_image'])
-        #bcf.learn_codebook()
+        bcf.load_training()
+        bcf.normalize_shapes()
+        bcf.extract_cf()
+        bcf.learn_codebook()
         bcf.encode_cf()
         bcf.spp()
+        #for (cls, idx) in bcf.data.keys():
+        #    image = bcf.data[(cls, idx)]
+        #    print (cls, idx)
+        #    print (np.sum(image['spp_descriptor']))
+        bcf.svm_train()
+    else:
+        bcf.load_testing()
+        bcf.normalize_shapes()
+        bcf.extract_cf()
+        bcf.encode_cf()
+        bcf.spp()
+        bcf.svm_classify_test()
 
    # C = np.array([
    # [6.0000,    5.8000],
