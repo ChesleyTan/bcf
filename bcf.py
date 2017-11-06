@@ -18,8 +18,8 @@ class BCF():
         self.PERC_TRAINING_PER_CLASS = 0.5
         self.CODEBOOK_FILE = "codebook.data"
         self.classes = defaultdict(list)
-        self.training_images = defaultdict(list)
-        self.normalized_training_images = defaultdict(list)
+        self.data = defaultdict(dict)
+        self.counter = defaultdict(int)
 
     def load_classes(self):
         for dir_name, subdir_list, file_list in os.walk(self.DATA_DIR):
@@ -31,72 +31,67 @@ class BCF():
     def load_training(self):
         for cls in self.classes:
             images = self.classes[cls]
-            self.training_images[cls] = [cv2.imread(image, cv2.IMREAD_GRAYSCALE) for image in
-                                         images[:int(len(images) * self.PERC_TRAINING_PER_CLASS)]]
+            for image in images[:int(len(images) * self.PERC_TRAINING_PER_CLASS)]:
+                self.data[self.get_image_identifier(cls)]['image'] = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
 
-    def normalize_shapes(self, images):
-        normalized = []
-        for image in images:
-            # Remove void space
-            y, x = np.where(image > 50)
-            max_y = y.max()
-            min_y = y.min()
-            max_x = x.max()
-            min_x = x.min()
-            trimmed = image[min_y:max_y, min_x:max_x] > 50
-            trimmed = trimmed.astype('uint8')
-            trimmed[trimmed > 0] = 255
-            normalized.append(trimmed)
-        return normalized
+    def normalize_shape(self, image):
+        # Remove void space
+        y, x = np.where(image > 50)
+        max_y = y.max()
+        min_y = y.min()
+        max_x = x.max()
+        min_x = x.min()
+        trimmed = image[min_y:max_y, min_x:max_x] > 50
+        trimmed = trimmed.astype('uint8')
+        trimmed[trimmed > 0] = 255
+        return trimmed
 
-    def extract_cf(self, images):
-        results = []
-        for image in images:
-            contours, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            contour = sorted(contours, key=len)[-1]
-            mat = np.zeros(image.shape, np.int8)
-            cv2.drawContours(mat, [contour], -1, (255, 255, 255))
-            #self.show(mat)
-            max_curvature = 1.5
-            n_contsamp = 50
-            n_pntsamp = 10
-            C = None
-            for pnt in contour:
-                if C is None:
-                    C = np.array([[pnt[0][0], pnt[0][1]]])
-                else:
-                    C = np.append(C, [[pnt[0][0], pnt[0][1]]], axis=0)
-            cfs = self.extr_raw_points(C, max_curvature, n_contsamp, n_pntsamp)
-            tmp = mat.copy()
-            for cf in cfs:
-                for pnt in cf:
-                    cv2.circle(tmp, (pnt[0], pnt[1]), 2, (255, 0, 0))
-                #self.show(tmp)
-            num_cfs = len(cfs)
-            print "Extracted %s points" % (num_cfs)
-            feat_sc = np.zeros((300, num_cfs))
-            xy = np.zeros((num_cfs, 2))
+    def extract_cf(self, image):
+        contours, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contour = sorted(contours, key=len)[-1]
+        mat = np.zeros(image.shape, np.int8)
+        cv2.drawContours(mat, [contour], -1, (255, 255, 255))
+        #self.show(mat)
+        max_curvature = 1.5
+        n_contsamp = 50
+        n_pntsamp = 10
+        C = None
+        for pnt in contour:
+            if C is None:
+                C = np.array([[pnt[0][0], pnt[0][1]]])
+            else:
+                C = np.append(C, [[pnt[0][0], pnt[0][1]]], axis=0)
+        cfs = self.extr_raw_points(C, max_curvature, n_contsamp, n_pntsamp)
+        tmp = mat.copy()
+        for cf in cfs:
+            for pnt in cf:
+                cv2.circle(tmp, (pnt[0], pnt[1]), 2, (255, 0, 0))
+            #self.show(tmp)
+        num_cfs = len(cfs)
+        print "Extracted %s points" % (num_cfs)
+        feat_sc = np.zeros((300, num_cfs))
+        xy = np.zeros((num_cfs, 2))
 
-            for i in range(num_cfs):
-                cf = cfs[i]
-                sc, _, _, _ = shape_context(cf)
-                # shape context is 60x5 (60 bins at 5 reference points)
-                sc = sc.flatten(order='F')
-                sc /= np.sum(sc) # normalize
-                feat_sc[:, i] = sc
-                # shape context descriptor sc for each cf is 300x1
-                # save a point at the midpoint of the contour fragment
-                xy[i, 0:2] = cf[np.round(len(cf) / 2. - 1).astype('int32'), :]
-            sz = image.shape
-            results.append((cfs, feat_sc, xy, sz))
-        return results
+        for i in range(num_cfs):
+            cf = cfs[i]
+            sc, _, _, _ = shape_context(cf)
+            # shape context is 60x5 (60 bins at 5 reference points)
+            sc = sc.flatten(order='F')
+            sc /= np.sum(sc) # normalize
+            feat_sc[:, i] = sc
+            # shape context descriptor sc for each cf is 300x1
+            # save a point at the midpoint of the contour fragment
+            xy[i, 0:2] = cf[np.round(len(cf) / 2. - 1).astype('int32'), :]
+        sz = image.shape
+        return (cfs, feat_sc, xy, sz)
 
-    def learn_codebook(self, feats):
+    def learn_codebook(self):
         MAX_CFS = 800 # max number of contour fragments per image; if above, sample randomly
         CLUSTERING_CENTERS = 1500
         feats_sc = []
-        for cf in range(len(feats)):
-            feat_sc = feats[cf][1]
+        for image in self.data.values():
+            feats = image['cfs']
+            feat_sc = feats[1]
             if feat_sc.shape[1] > MAX_CFS:
                 # Sample MAX_CFS from contour fragments
                 rand_indices = np.random.permutation(feat_sc.shape[1])
@@ -110,28 +105,24 @@ class BCF():
             pickle.dump(kmeans, out_file, -1)
         return kmeans
 
-    def encode_cf(self, feats):
+    def encode_cf(self):
         K_NN = 5
         # Represent each contour fragment shape descriptor as a combination of K_NN of the
         # clustering centers
         with open(self.CODEBOOK_FILE, 'rb') as in_file:
             kmeans = pickle.load(in_file)
-        encoded_shape_descriptors = []
-        for cf in range(len(feats)):
-            feat_sc = feats[cf][1]
-            encoded_shape_descriptors.append(llc_coding_approx(kmeans.cluster_centers_, feat_sc.transpose(), K_NN))
-        return encoded_shape_descriptors
+        for image in self.data.values():
+            feat_sc = image['cfs'][1]
+            image['encoded_shape_descriptors'] = llc_coding_approx(kmeans.cluster_centers_, feat_sc.transpose(), K_NN)
 
-    def spp(self, feats, encoded_shape_descriptors):
+    def spp(self):
         PYRAMID = np.array([1, 2, 4])
-        descriptors = []
-        for cf in range(len(feats)):
-            feat = feats[cf]
-            feas = self.pyramid_pooling(PYRAMID, feat[3], feat[2], encoded_shape_descriptors[cf])
+        for image in self.data.values():
+            feat = image['cfs']
+            feas = self.pyramid_pooling(PYRAMID, feat[3], feat[2], image['encoded_shape_descriptors'])
             fea = feas.flatten()
             fea /= np.sqrt(np.sum(fea**2))
-            descriptors.append(fea)
-        return descriptors
+            image['spp_descriptor'] = fea
 
     def pyramid_pooling(self, pyramid, sz, xy, encoded_shape_descriptors):
         feas = np.zeros((encoded_shape_descriptors.shape[1], np.sum(pyramid**2)))
@@ -205,6 +196,13 @@ class BCF():
         cf = cf[ii, :]
         return cf
 
+    def next_count(self, cls):
+        self.counter[cls] += 1
+        return self.counter[cls]
+
+    def get_image_identifier(self, cls):
+        return (cls, self.next_count(cls))
+
 if __name__ == "__main__":
     bcf = BCF()
     bcf.load_classes()
@@ -212,14 +210,13 @@ if __name__ == "__main__":
     feats = []
     train = True
     if train:
-        for cls in bcf.training_images:
-            bcf.training_images[cls] = bcf.normalize_shapes(bcf.training_images[cls])
-            print cls
-            feats += bcf.extract_cf(bcf.training_images[cls])
-        bcf.learn_codebook(feats)
-        encoded_shape_descriptors = bcf.encode_cf(feats)
-        pooled = bcf.spp(feats, encoded_shape_descriptors)
-        print ([np.sum(x) for x in pooled])
+        for (cls, idx) in bcf.data.keys():
+            print (cls, idx)
+            bcf.data[(cls, idx)]['normalized_image'] = bcf.normalize_shape(bcf.data[(cls, idx)]['image'])
+            bcf.data[(cls, idx)]['cfs'] = bcf.extract_cf(bcf.data[(cls, idx)]['normalized_image'])
+        #bcf.learn_codebook()
+        bcf.encode_cf()
+        bcf.spp()
 
    # C = np.array([
    # [6.0000,    5.8000],
