@@ -1,17 +1,22 @@
 import os
 from collections import defaultdict
+from functools import reduce
 
 from scipy.spatial.distance import cdist
 import numpy as np
 import cv2
+import sklearn.cluster
+import cPickle as pickle
 
 from evolution import evolution
 from shape_context import shape_context
+from llc import llc_coding_approx
 
 class BCF():
     def __init__(self):
         self.DATA_DIR = "data/cuauv"
         self.PERC_TRAINING_PER_CLASS = 0.5
+        self.CODEBOOK_FILE = "codebook.data"
         self.classes = defaultdict(list)
         self.training_images = defaultdict(list)
         self.normalized_training_images = defaultdict(list)
@@ -45,12 +50,13 @@ class BCF():
         return normalized
 
     def extract_cf(self, images):
+        results = []
         for image in images:
             contours, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             contour = sorted(contours, key=len)[-1]
             mat = np.zeros(image.shape, np.int8)
             cv2.drawContours(mat, [contour], -1, (255, 255, 255))
-            self.show(mat)
+            #self.show(mat)
             max_curvature = 1.5
             n_contsamp = 50
             n_pntsamp = 10
@@ -82,14 +88,74 @@ class BCF():
                 # save a point at the midpoint of the contour fragment
                 xy[i, 0:2] = cf[np.round(len(cf) / 2. - 1).astype('int32'), :]
             sz = image.shape
+            results.append((cfs, feat_sc, xy, sz))
+        return results
 
-    def learn_codebook(self):
-        pass
+    def learn_codebook(self, feats):
+        MAX_CFS = 800 # max number of contour fragments per image; if above, sample randomly
+        CLUSTERING_CENTERS = 1500
+        feats_sc = []
+        for cf in range(len(feats)):
+            feat_sc = feats[cf][1]
+            if feat_sc.shape[1] > MAX_CFS:
+                # Sample MAX_CFS from contour fragments
+                rand_indices = np.random.permutation(feat_sc.shape[1])
+                feat_sc = feat_sc[:, rand_indices[:MAX_CFS]]
+            feats_sc.append(feat_sc)
+        feats_sc = np.concatenate(feats_sc, axis=1).transpose()
+        print("Running KMeans...")
+        kmeans = sklearn.cluster.KMeans(min(CLUSTERING_CENTERS, feats_sc.shape[0]), n_jobs=-1, algorithm='elkan').fit(feats_sc)
+        print("Saving codebook...")
+        with open(self.CODEBOOK_FILE, 'wb') as out_file:
+            pickle.dump(kmeans, out_file, -1)
+        return kmeans
 
-    def encode_cf(self):
-        pass
+    def encode_cf(self, feats):
+        K_NN = 5
+        # Represent each contour fragment shape descriptor as a combination of K_NN of the
+        # clustering centers
+        with open(self.CODEBOOK_FILE, 'rb') as in_file:
+            kmeans = pickle.load(in_file)
+        encoded_shape_descriptors = []
+        for cf in range(len(feats)):
+            feat_sc = feats[cf][1]
+            encoded_shape_descriptors.append(llc_coding_approx(kmeans.cluster_centers_, feat_sc.transpose(), K_NN))
+        return encoded_shape_descriptors
 
-    def spp(self):
+    def spp(self, feats, encoded_shape_descriptors):
+        PYRAMID = np.array([1, 2, 4])
+        descriptors = []
+        for cf in range(len(feats)):
+            feat = feats[cf]
+            feas = self.pyramid_pooling(PYRAMID, feat[3], feat[2], encoded_shape_descriptors[cf])
+            fea = feas.flatten()
+            fea /= np.sqrt(np.sum(fea**2))
+            descriptors.append(fea)
+        return descriptors
+
+    def pyramid_pooling(self, pyramid, sz, xy, encoded_shape_descriptors):
+        feas = np.zeros((encoded_shape_descriptors.shape[1], np.sum(pyramid**2)))
+        counter = 0
+        height = sz[0]
+        width = sz[1]
+        x = xy[:, 0] # midpoint for each contour fragment
+        y = xy[:, 1]
+        for p in range(len(pyramid)):
+            for i in range(pyramid[p]):
+                for j in range(pyramid[p]):
+                    yrang = height * np.array([float(i), float(i+1)]) / pyramid[p]
+                    xrang = width * np.array([float(j), float(j+1)]) / pyramid[p]
+                    c = encoded_shape_descriptors[reduce(np.logical_and, [x >= xrang[0], x < xrang[1], y >= yrang[0], y < yrang[1]])] # get submatrix
+                    if c.shape[0] == 0:
+                        f = np.zeros(encoded_shape_descriptors.shape[1])
+                    else:
+                        f = np.amax(c, axis=0) # max vals in submatrix
+                    feas[:len(f), counter] = f
+                    counter += 1
+        return feas
+
+    def svm_train(self):
+        print self.training_images
         pass
 
     def svm_classify(self):
@@ -143,11 +209,18 @@ if __name__ == "__main__":
     bcf = BCF()
     bcf.load_classes()
     bcf.load_training()
-    print bcf.classes
-    for cls in bcf.training_images:
-        bcf.training_images[cls] = bcf.normalize_shapes(bcf.training_images[cls])
-        print cls
-        bcf.extract_cf(bcf.training_images[cls])
+    feats = []
+    train = True
+    if train:
+        for cls in bcf.training_images:
+            bcf.training_images[cls] = bcf.normalize_shapes(bcf.training_images[cls])
+            print cls
+            feats += bcf.extract_cf(bcf.training_images[cls])
+        bcf.learn_codebook(feats)
+        encoded_shape_descriptors = bcf.encode_cf(feats)
+        pooled = bcf.spp(feats, encoded_shape_descriptors)
+        print ([np.sum(x) for x in pooled])
+
    # C = np.array([
    # [6.0000,    5.8000],
    # [8.4189,    5.8000],
