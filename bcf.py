@@ -44,8 +44,8 @@ class BCF():
                 self.data[self.get_image_identifier(cls)]['image'] = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
 
     def normalize_shapes(self):
-        for (cls, idx) in bcf.data.keys():
-            image = bcf.data[(cls, idx)]['image']
+        for (cls, idx) in self.data.keys():
+            image = self.data[(cls, idx)]['image']
             # Remove void space
             y, x = np.where(image > 50)
             max_y = y.max()
@@ -55,11 +55,11 @@ class BCF():
             trimmed = image[min_y:max_y, min_x:max_x] > 50
             trimmed = trimmed.astype('uint8')
             trimmed[trimmed > 0] = 255
-            bcf.data[(cls, idx)]['normalized_image'] = trimmed
+            self.data[(cls, idx)]['normalized_image'] = trimmed
 
     def extract_cf(self):
-        for (cls, idx) in bcf.data.keys():
-            image = bcf.data[(cls, idx)]['normalized_image']
+        for (cls, idx) in self.data.keys():
+            image = self.data[(cls, idx)]['normalized_image']
             contours, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             contour = sorted(contours, key=len)[-1]
             mat = np.zeros(image.shape, np.int8)
@@ -96,7 +96,7 @@ class BCF():
                 # save a point at the midpoint of the contour fragment
                 xy[i, 0:2] = cf[np.round(len(cf) / 2. - 1).astype('int32'), :]
             sz = image.shape
-            bcf.data[(cls, idx)]['cfs'] = (cfs, feat_sc, xy, sz)
+            self.data[(cls, idx)]['cfs'] = (cfs, feat_sc, xy, sz)
 
     def learn_codebook(self):
         MAX_CFS = 800 # max number of contour fragments per image; if above, sample randomly
