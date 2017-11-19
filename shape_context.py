@@ -1,5 +1,6 @@
 import numpy as np
 
+# Ported from original BCF implementation in MATLAB
 def shape_context(cont, n_ref=5, n_dist=5, n_theta=12, b_tangent=1):
     n_pt = cont.shape[0]
     X = np.array([cont[:, 0]]).transpose()
