@@ -28,20 +28,26 @@ class BCF():
         for dir_name, subdir_list, file_list in os.walk(self.DATA_DIR):
             if subdir_list:
                 continue
-            for f in file_list:
+            for f in sorted(file_list, key=lambda x: (len(x), x)):
                 self.classes[dir_name.split('/')[-1]].append(os.path.join(dir_name, f))
 
     def load_training(self):
         for cls in self.classes:
             images = self.classes[cls]
             for image in images[:int(len(images) * self.PERC_TRAINING_PER_CLASS)]:
-                self.data[self.get_image_identifier(cls)]['image'] = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
+                image_id = self.get_image_identifier(cls)
+                self.data[image_id]['image'] = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
+                if self.data[image_id]['image'] is None:
+                    print("Failed to load " + image)
 
     def load_testing(self):
         for cls in self.classes:
             images = self.classes[cls]
             for image in images[int(len(images) * self.PERC_TRAINING_PER_CLASS):]:
-                self.data[self.get_image_identifier(cls)]['image'] = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
+                image_id = self.get_image_identifier(cls)
+                self.data[image_id]['image'] = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
+                if self.data[image_id]['image'] is None:
+                    print("Failed to load " + image)
 
     def normalize_shapes(self):
         for (cls, idx) in self.data.keys():
@@ -81,7 +87,7 @@ class BCF():
                     cv2.circle(tmp, (pnt[0], pnt[1]), 2, (255, 0, 0))
                 #self.show(tmp)
             num_cfs = len(cfs)
-            print "Extracted %s points" % (num_cfs)
+            print("Extracted %s points" % (num_cfs))
             feat_sc = np.zeros((300, num_cfs))
             xy = np.zeros((num_cfs, 2))
 
@@ -189,7 +195,7 @@ class BCF():
                 correct += 1
             else:
                 print("Mistook %s for %s" % (label_to_cls[labels[i]], label_to_cls[predictions[i]]))
-        print ("Correct: %s out of %s (Accuracy: %.2f%%)" % (correct, len(predictions), 100. * correct / len(predictions)))
+        print("Correct: %s out of %s (Accuracy: %.2f%%)" % (correct, len(predictions), 100. * correct / len(predictions)))
 
     def show(self, image):
         cv2.imshow('image', image)
