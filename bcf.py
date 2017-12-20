@@ -28,7 +28,7 @@ class BCF():
         for dir_name, subdir_list, file_list in os.walk(self.DATA_DIR):
             if subdir_list:
                 continue
-            for f in sorted(file_list, key=lambda x: (len(x), x)):
+            for f in sorted(file_list, key=hash):
                 self.classes[dir_name.split('/')[-1]].append(os.path.join(dir_name, f))
 
     def load_training(self):
