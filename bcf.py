@@ -20,36 +20,57 @@ class BCF():
         self.PERC_TRAINING_PER_CLASS = 0.5
         self.CODEBOOK_FILE = "codebook.data"
         self.CLASSIFIER_FILE = "classifier"
+        self.LABEL_TO_CLASS_MAPPING_FILE = "labels_to_classes.data"
         self.classes = defaultdict(list)
         self.data = defaultdict(dict)
         self.counter = defaultdict(int)
+        self.kmeans = None
+        self.clf = None
+        self.label_to_class_mapping = None
 
-    def load_classes(self):
+    def _load_classes(self):
         for dir_name, subdir_list, file_list in os.walk(self.DATA_DIR):
             if subdir_list:
                 continue
             for f in sorted(file_list, key=hash):
                 self.classes[dir_name.split('/')[-1]].append(os.path.join(dir_name, f))
 
-    def load_training(self):
+    def _load_training(self):
         for cls in self.classes:
             images = self.classes[cls]
             for image in images[:int(len(images) * self.PERC_TRAINING_PER_CLASS)]:
-                image_id = self.get_image_identifier(cls)
+                image_id = self._get_image_identifier(cls)
                 self.data[image_id]['image'] = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
                 if self.data[image_id]['image'] is None:
                     print("Failed to load " + image)
 
-    def load_testing(self):
+    def _load_testing(self):
         for cls in self.classes:
             images = self.classes[cls]
             for image in images[int(len(images) * self.PERC_TRAINING_PER_CLASS):]:
-                image_id = self.get_image_identifier(cls)
+                image_id = self._get_image_identifier(cls)
                 self.data[image_id]['image'] = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
                 if self.data[image_id]['image'] is None:
                     print("Failed to load " + image)
 
-    def normalize_shapes(self):
+    def _load_single(self, image):
+        # Load single image data
+        self.data.clear()
+        image_id = self._get_image_identifier(None)
+        self.data[image_id]['image'] = image
+
+    def _save_label_to_class_mapping(self):
+        self.label_to_class_mapping = {hash(cls): cls for cls in self.classes}
+        with open(self.LABEL_TO_CLASS_MAPPING_FILE, 'wb') as out_file:
+            pickle.dump(self.label_to_class_mapping, out_file, -1)
+
+    def _load_label_to_class_mapping(self):
+        if self.label_to_class_mapping is None:
+            with open(self.LABEL_TO_CLASS_MAPPING_FILE, 'rb') as in_file:
+                self.label_to_class_mapping = pickle.load(in_file)
+        return self.label_to_class_mapping
+
+    def _normalize_shapes(self):
         for (cls, idx) in self.data.keys():
             image = self.data[(cls, idx)]['image']
             # Remove void space
@@ -63,7 +84,7 @@ class BCF():
             trimmed[trimmed > 0] = 255
             self.data[(cls, idx)]['normalized_image'] = trimmed
 
-    def extract_cf(self):
+    def _extract_cf(self):
         for (cls, idx) in self.data.keys():
             image = self.data[(cls, idx)]['normalized_image']
             contours, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -80,7 +101,7 @@ class BCF():
                     C = np.array([[pnt[0][0], pnt[0][1]]])
                 else:
                     C = np.append(C, [[pnt[0][0], pnt[0][1]]], axis=0)
-            cfs = self.extr_raw_points(C, MAX_CURVATURE, N_CONTSAMP, N_PNTSAMP)
+            cfs = self._extr_raw_points(C, MAX_CURVATURE, N_CONTSAMP, N_PNTSAMP)
             tmp = mat.copy()
             for cf in cfs:
                 for pnt in cf:
@@ -104,7 +125,7 @@ class BCF():
             sz = image.shape
             self.data[(cls, idx)]['cfs'] = (cfs, feat_sc, xy, sz)
 
-    def learn_codebook(self):
+    def _learn_codebook(self):
         MAX_CFS = 800 # max number of contour fragments per image; if above, sample randomly
         CLUSTERING_CENTERS = 1500
         feats_sc = []
@@ -118,32 +139,40 @@ class BCF():
             feats_sc.append(feat_sc)
         feats_sc = np.concatenate(feats_sc, axis=1).transpose()
         print("Running KMeans...")
-        kmeans = sklearn.cluster.KMeans(min(CLUSTERING_CENTERS, feats_sc.shape[0]), n_jobs=-1, algorithm='elkan').fit(feats_sc)
+        self.kmeans = sklearn.cluster.KMeans(min(CLUSTERING_CENTERS, feats_sc.shape[0]), n_jobs=-1, algorithm='elkan').fit(feats_sc)
         print("Saving codebook...")
+        self._save_kmeans(self.kmeans)
+        return self.kmeans
+
+    def _save_kmeans(self, kmeans):
         with open(self.CODEBOOK_FILE, 'wb') as out_file:
             pickle.dump(kmeans, out_file, -1)
-        return kmeans
 
-    def encode_cf(self):
+    def _load_kmeans(self):
+        if self.kmeans is None:
+            with open(self.CODEBOOK_FILE, 'rb') as in_file:
+                self.kmeans = pickle.load(in_file)
+        return self.kmeans
+
+    def _encode_cf(self):
         K_NN = 5
+        kmeans = self._load_kmeans()
         # Represent each contour fragment shape descriptor as a combination of K_NN of the
         # clustering centers
-        with open(self.CODEBOOK_FILE, 'rb') as in_file:
-            kmeans = pickle.load(in_file)
         for image in self.data.values():
             feat_sc = image['cfs'][1]
             image['encoded_shape_descriptors'] = llc_coding_approx(kmeans.cluster_centers_, feat_sc.transpose(), K_NN)
 
-    def spp(self):
+    def _spp(self):
         PYRAMID = np.array([1, 2, 4])
         for image in self.data.values():
             feat = image['cfs']
-            feas = self.pyramid_pooling(PYRAMID, feat[3], feat[2], image['encoded_shape_descriptors'])
+            feas = self._pyramid_pooling(PYRAMID, feat[3], feat[2], image['encoded_shape_descriptors'])
             fea = feas.flatten()
             fea /= np.sqrt(np.sum(fea**2))
             image['spp_descriptor'] = fea
 
-    def pyramid_pooling(self, pyramid, sz, xy, encoded_shape_descriptors):
+    def _pyramid_pooling(self, pyramid, sz, xy, encoded_shape_descriptors):
         feas = np.zeros((encoded_shape_descriptors.shape[1], np.sum(pyramid**2)))
         counter = 0
         height = sz[0]
@@ -164,7 +193,18 @@ class BCF():
                     counter += 1
         return feas
 
-    def svm_train(self):
+    def _save_classifier(self, clf):
+        with open(self.CLASSIFIER_FILE, 'wb') as out_file:
+            pickle.dump(clf, out_file, -1)
+
+    def _load_classifier(self):
+        if self.clf is None:
+            with open(self.CLASSIFIER_FILE, 'rb') as in_file:
+                self.clf = pickle.load(in_file)
+        return self.clf
+
+    def _svm_train(self):
+        self._save_label_to_class_mapping()
         clf = sklearn.svm.LinearSVC(multi_class='crammer_singer')
         training_data = []
         labels = []
@@ -172,36 +212,33 @@ class BCF():
             training_data.append(self.data[(cls, idx)]['spp_descriptor'])
             labels.append(hash(cls))
         print("Training SVM...")
-        clf = clf.fit(training_data, labels)
+        self.clf = clf.fit(training_data, labels)
         print("Saving classifier...")
-        with open(self.CLASSIFIER_FILE, 'wb') as out_file:
-            pickle.dump(clf, out_file, -1)
-        return clf
+        self._save_classifier(self.clf)
+        return self.clf
 
-    def svm_classify_test(self):
-        with open(self.CLASSIFIER_FILE, 'rb') as in_file:
-            clf = pickle.load(in_file)
+    def _svm_classify_test(self):
+        clf = self._load_classifier()
+        label_to_cls = self._load_label_to_class_mapping()
         testing_data = []
         labels = []
-        label_to_cls = {}
         for (cls, idx) in self.data.keys():
             testing_data.append(self.data[(cls, idx)]['spp_descriptor'])
             labels.append(hash(cls))
-            label_to_cls[hash(cls)] = cls
         predictions = clf.predict(testing_data)
         correct = 0
-        for i in range(len(labels)):
-            if predictions[i] == labels[i]:
+        for (i, label) in enumerate(labels):
+            if predictions[i] == label:
                 correct += 1
             else:
-                print("Mistook %s for %s" % (label_to_cls[labels[i]], label_to_cls[predictions[i]]))
+                print("Mistook %s for %s" % (label_to_cls[label], label_to_cls[predictions[i]]))
         print("Correct: %s out of %s (Accuracy: %.2f%%)" % (correct, len(predictions), 100. * correct / len(predictions)))
 
     def show(self, image):
         cv2.imshow('image', image)
         _ = cv2.waitKey()
 
-    def extr_raw_points(self, c, max_value, N, nn):
+    def _extr_raw_points(self, c, max_value, N, nn):
         # -------------------------------------------------------
         # [SegmentX, SegmentY,NO]=GenSegmentsNew(a,b,maxvalue,nn)
         # This function is used to generate all the segments
@@ -229,52 +266,89 @@ class BCF():
                     cf = c[i_kp[i]:i_kp[j]+1, :]
                 if i > j:
                     cf = np.append(c[i_kp[i]:, :], c[:i_kp[j]+1, :], axis=0)
-                pnts[s] = self.sample_contour(cf, nn)
+                pnts[s] = self._sample_contour(cf, nn)
                 s += 1
-        pnts[s] = self.sample_contour(c, nn)
+        pnts[s] = self._sample_contour(c, nn)
         return pnts
 
-    def sample_contour(self, cf, nn):
+    def _sample_contour(self, cf, nn):
         # Sample points from contour fragment
         _len = cf.shape[0]
         ii = np.round(np.arange(0, _len - 0.9999, float(_len - 1) / (nn - 1))).astype('int32')
         cf = cf[ii, :]
         return cf
 
-    def next_count(self, cls):
+    def _next_count(self, cls):
         self.counter[cls] += 1
         return self.counter[cls]
 
-    def get_image_identifier(self, cls):
-        return (cls, self.next_count(cls))
+    def _get_image_identifier(self, cls):
+        return (cls, self._next_count(cls))
+
+    def _predict(self):
+        with open(self.CLASSIFIER_FILE, 'rb') as in_file:
+            clf = pickle.load(in_file)
+        label_to_cls = self._load_label_to_class_mapping()
+        testing_data = []
+        for (cls, idx) in self.data.keys():
+            testing_data.append(self.data[(cls, idx)]['spp_descriptor'])
+        predictions = clf.predict(testing_data)
+        return [label_to_cls[label] for label in predictions]
+
+    def classify_single(self, image):
+        '''
+        Classifies a single image
+        Example usage:
+            mat = cv2.imread("data/cuauv/lightning/lightning-10.jpg", cv2.IMREAD_GRAYSCALE)
+            print(bcf.classify_single(mat))
+        '''
+        self._load_single(image)
+        self._normalize_shapes()
+        self._extract_cf()
+        self._encode_cf()
+        self._spp()
+        return self._predict()[0]
+
+    def train(self):
+        self._load_classes()
+        self._load_training()
+        self._normalize_shapes()
+        self._extract_cf()
+        self._learn_codebook()
+        self._encode_cf()
+        self._spp()
+        self._svm_train()
+
+    def test(self):
+        self._load_classes()
+        self._load_testing()
+        self._normalize_shapes()
+        self._extract_cf()
+        self._encode_cf()
+        self._spp()
+        self._svm_classify_test()
 
 if __name__ == "__main__":
     bcf = BCF()
-    bcf.load_classes()
-    train = False
+    action = "train"
     if len(sys.argv) > 1:
-        train = sys.argv[1] == "train"
-    if train:
+        action = sys.argv[1]
+    if action == "train":
         print("Training mode")
-        bcf.load_training()
-        bcf.normalize_shapes()
-        bcf.extract_cf()
-        bcf.learn_codebook()
-        bcf.encode_cf()
-        bcf.spp()
-        #for (cls, idx) in bcf.data.keys():
-        #    image = bcf.data[(cls, idx)]
-        #    print (cls, idx)
-        #    print (np.sum(image['spp_descriptor']))
-        bcf.svm_train()
-    else:
+        bcf.train()
+    elif action == "test":
         print("Testing mode")
-        bcf.load_testing()
-        bcf.normalize_shapes()
-        bcf.extract_cf()
-        bcf.encode_cf()
-        bcf.spp()
-        bcf.svm_classify_test()
+        bcf.test()
+    elif action == "single":
+        print("Single classification mode")
+        mat = cv2.imread(sys.argv[2], cv2.IMREAD_GRAYSCALE)
+        if mat is None:
+            print("Failed to load: " + sys.argv[2])
+            sys.exit(1)
+        print(bcf.classify_single(mat))
+    else:
+        print("Usage: bcf.py [train | test | single <image file>]")
+        sys.exit(1)
 
    # C = np.array([
    # [6.0000,    5.8000],
